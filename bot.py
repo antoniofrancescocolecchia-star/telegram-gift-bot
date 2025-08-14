@@ -5,12 +5,20 @@ from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
-# Carica le variabili d'ambiente
+# Carica variabili d'ambiente
 load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 TARGET_CHAT_ID = int(os.getenv("TARGET_CHAT_ID", "0"))
 
-# File per memorizzare i post già visti (evita duplicati)
+# Legge lista canali da variabile CHANNELS
+CHANNELS = [c.strip() for c in os.getenv("CHANNELS", "").split(",") if c.strip()]
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN non impostato")
+if not CHANNELS:
+    raise RuntimeError("Nessun canale configurato in CHANNELS")
+
+# File per memorizzare messaggi già notificati
 STATE_PATH = Path("gifts_state.json")
 if STATE_PATH.exists():
     try:
@@ -26,7 +34,7 @@ def save_state():
     except Exception:
         pass
 
-# Parole chiave per individuare i regali
+# Parole chiave per individuare regali
 KEYWORDS = [
     r"\bregali?\b", r"\bregalo\b", r"\bnuov[oi]\s+regali?\b",
     r"\bgift(s)?\b", r"\bpremium\s+gift(s)?\b",
@@ -55,8 +63,7 @@ def is_new_announcement(chat_id: int, message_id: int) -> bool:
 
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "Bot attivo. Aggiungimi come admin nei canali da monitorare.\n"
-        "Ti notificherò SOLO nuovi regali."
+        "Bot attivo.\nMonitorando i canali configurati in CHANNELS."
     )
     if TARGET_CHAT_ID == 0:
         await update.message.reply_text(f"Il tuo chat ID è: {update.effective_user.id}")
@@ -64,6 +71,11 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def on_channel_post(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = update.channel_post
     text = msg.text or msg.caption or ""
+    chat_username = f"@{msg.chat.username}" if msg.chat.username else str(msg.chat.id)
+
+    if chat_username not in CHANNELS and str(msg.chat.id) not in CHANNELS:
+        return
+
     if not text or not KEY_RE.search(text):
         return
     if not is_new_announcement(msg.chat.id, msg.message_id):
@@ -72,9 +84,8 @@ async def on_channel_post(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     price = extract_price(text)
-    chat = msg.chat
-    title = chat.title or chat.username or str(chat.id)
-    link = f"https://t.me/{chat.username}/{msg.message_id}" if chat.username else None
+    title = msg.chat.title or chat_username
+    link = f"https://t.me/{msg.chat.username}/{msg.message_id}" if msg.chat.username else None
 
     parts = [f"Nuovo regalo su: {html.escape(title)}"]
     if price:
@@ -91,8 +102,6 @@ async def on_channel_post(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await ctx.bot.send_message(TARGET_CHAT_ID, caption, parse_mode=ParseMode.HTML)
 
 def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN non impostato")
     app = Application.builder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.UpdateType.CHANNEL_POST, on_channel_post))
